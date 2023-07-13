@@ -1,0 +1,59 @@
+with pagos_finally as (
+with pagos as (
+select d.document_id  , d.client_rut , datediff(p.payment_date ,d.abonado_date) as delta_days_payment, pd.delay_rate , pd.delay_amount  , d.finance_amount ,
+case when datediff(p.payment_date, d.custom_expiration_utc) > 0 then datediff(p.payment_date, d.custom_expiration_utc)
+	when datediff(p.payment_date, d.custom_expiration_utc) <= 0 then 0 end as mora_days,
+	case when  pm.payment_description IN ('TRANSFERENCIA SANTANDER','TRANSFERENCIA BCI','TRANSFERENCIA BBVA','TRANSFERENCIA', 'CTA CTE', 'EXCEDENTES') THEN 'cash'
+	ELSE 'not_cash' END AS payment_type,
+	pm.payment_description, 
+	d.applied_base_rate , SUBSTRING_INDEX(SUBSTRING_INDEX(JSON_EXTRACT_JSON(d.operation, 'price_dif'),'"', 2), '"', -1) as delta_price_amount,
+	 o.comissions , o.expenses , o.no_reception , o.operation_id 
+from fc_documents d
+left join fc_rf_payment_documents pd on pd.document_id = d.document_id 
+left join fc_payments p on p.payment_id = pd.payment_id 
+left join (select payment_id, sum(amount) as amount_payed, MAX(payment_description) as payment_description 
+				from fc_rf_payment_means 
+				group by payment_id) pm  on pm.payment_id = pd.payment_id 
+left join fc_rf_operation_documents od on od.document_id = d.document_id 
+left join fc_operations o on o.operation_id = od.operation_id 
+where d.status = 3
+and year(d.abonado_date) >= 2022 
+)
+select pagos.*, pagos.delta_price_amount + pagos.comissions/n_docs_per_op + pagos.expenses/n_docs_per_op + pagos.delay_amount as ingreso, ns.n_docs_per_op,
+30*(pagos.delta_price_amount + pagos.comissions/n_docs_per_op + pagos.expenses/n_docs_per_op + pagos.delay_amount)/(pagos.finance_amount*delta_days_payment) as real_rate,
+30*(pagos.delta_price_amount + pagos.comissions/n_docs_per_op + pagos.expenses/n_docs_per_op + pagos.delay_amount)/(pagos.finance_amount*delta_days_payment)*finance_amount as ponderado_amount
+from pagos
+left join (select p2.operation_id, count(*) as n_docs_per_op
+		from pagos p2
+		group by p2.operation_id ) ns on ns.operation_id = pagos.operation_id 
+		),
+sizes as (
+ with w as (
+with montos as (
+select month(FROM_UNIXTIME(emission)) as mes,  original_amount  as invoice_amount , sii_reclaimed, has_annulment_nc ,
+case when (has_annulment_nc = 1 or sii_reclaimed = 1) then 0 
+	else original_amount end as valid_amount,
+c.business_reason, c.customer_id , finance_amount
+from fc_documents d
+left join fc_customers c on c.customer_id = d.client_rut
+where year(FROM_UNIXTIME(emission)) = 2023
+)
+select montos.business_reason, montos.customer_id, montos.mes, sum(montos.invoice_amount) as sum_invoice_amount,
+sum(montos.valid_amount) as sum_valid_amount, sum(montos.finance_amount) as sum_finance_amount
+from montos
+group by business_reason, customer_id, mes
+
+)
+select business_reason, customer_id, sum(sum_valid_amount)/6 as monthly_amount, sum(sum_finance_amount) as anual_financed,
+case when sum(sum_valid_amount)/6 >= 150000000 then "Big"
+	when sum(sum_valid_amount)/6 >= 100000000 then "Medium"
+	when  sum(sum_valid_amount)/6 > 50000000 then "Small"
+	else "Diminutive" end as sized
+from w
+group by business_reason, customer_id
+
+)
+select sum(pagos_finally.ponderado_amount)/sum(pagos_finally.finance_amount), sizes.sized
+from pagos_finally
+left join sizes on sizes.customer_id = pagos_finally.client_rut 
+group by sizes.sized
