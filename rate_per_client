@@ -1,0 +1,39 @@
+with pagos_finally as (
+with pagos as (
+select d.document_id  , d.client_rut , c.business_reason , datediff(p.payment_date ,d.abonado_date) as delta_days_payment, pd.delay_rate , pd.delay_amount  , d.finance_amount , DATE(FROM_UNIXTIME(emission)) as emission,  
+case when datediff(p.payment_date, d.custom_expiration_utc) > 0 then datediff(p.payment_date, d.custom_expiration_utc)
+	when datediff(p.payment_date, d.custom_expiration_utc) <= 0 then 0 end as mora_days,
+	case when  pm.payment_description IN ('TRANSFERENCIA SANTANDER','TRANSFERENCIA BCI','TRANSFERENCIA BBVA','TRANSFERENCIA', 'CTA CTE', 'EXCEDENTES') THEN 'cash'
+	ELSE 'not_cash' END AS payment_type,
+	pm.payment_description, 
+	d.applied_base_rate , SUBSTRING_INDEX(SUBSTRING_INDEX(JSON_EXTRACT_JSON(d.operation, 'price_dif'),'"', 2), '"', -1) as delta_price_amount,
+	 o.comissions , o.expenses , o.no_reception , o.operation_id 
+from fc_documents d
+left join fc_rf_payment_documents pd on pd.document_id = d.document_id 
+left join fc_payments p on p.payment_id = pd.payment_id 
+left join (select payment_id, sum(amount) as amount_payed, MAX(payment_description) as payment_description 
+				from fc_rf_payment_means 
+				group by payment_id) pm  on pm.payment_id = pd.payment_id 
+left join fc_rf_operation_documents od on od.document_id = d.document_id 
+left join fc_operations o on o.operation_id = od.operation_id 
+left join fc_customers c on c.customer_id = d.client_rut 
+where d.status = 3
+and year(FROM_UNIXTIME(d.emission)) >= 2023 
+)
+select pagos.*, 
+pagos.delta_price_amount + pagos.comissions*(pagos.finance_amount/ns.finance_operation_amount) + pagos.expenses*(pagos.finance_amount/ns.finance_operation_amount) + pagos.delay_amount as ingreso, ns.n_docs_per_op,
+(pagos.delta_price_amount + pagos.comissions*(pagos.finance_amount/ns.finance_operation_amount) + pagos.expenses*(pagos.finance_amount/ns.finance_operation_amount) + pagos.delay_amount)/(pagos.finance_amount*delta_days_payment) as daily_rate
+from pagos
+left join (select p2.operation_id, count(*) as n_docs_per_op, sum(p2.finance_amount) as finance_operation_amount
+		from pagos p2
+		where p2.payment_type = 'cash'
+		group by p2.operation_id
+		) ns on ns.operation_id = pagos.operation_id 
+where pagos.payment_type = 'cash'
+		)
+select  pagos_finally.business_reason, sum(pagos_finally.ingreso)/sum(pagos_finally.finance_amount) as rate, avg(30*pagos_finally.daily_rate)  as avg_monthly_rate, 
+sum(pagos_finally.daily_rate*pagos_finally.finance_amount*pagos_finally.delta_days_payment)/sum(pagos_finally.finance_amount) as ponderated_rate,
+sum(pagos_finally.daily_rate*30*pagos_finally.finance_amount*pagos_finally.delta_days_payment)/sum(pagos_finally.finance_amount*pagos_finally.delta_days_payment) as ponderated_monthly_rate
+from pagos_finally
+group by pagos_finally.business_reason
+order by sum(pagos_finally.daily_rate*30*pagos_finally.finance_amount*pagos_finally.delta_days_payment)/sum(pagos_finally.finance_amount*pagos_finally.delta_days_payment) DESC
