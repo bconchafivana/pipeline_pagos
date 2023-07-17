@@ -1,0 +1,13 @@
+with this as 
+(
+
+select d.document_id , d.finance_amount , 
+JSON_EXTRACT_JSON(d.operation, 'expiration_days') as expiration_days, 
+SUBSTRING_INDEX(SUBSTRING_INDEX(JSON_EXTRACT_JSON(d.operation, 'price_dif'),'"', 2), '"', -1) as delta_price_amount,
+SUBSTRING_INDEX(SUBSTRING_INDEX(JSON_EXTRACT_JSON(d.operation, 'base_rate'),'"', 2), '"', -1) as base_rate
+from fc_documents d
+where d.finance_amount is not null and year(FROM_UNIXTIME(d.emission)) = 2023 and document_id = '17713431-7_33_645'
+
+)
+select finance_amount*expiration_days*base_rate/3000, delta_price_amount
+from this
