@@ -17,15 +17,19 @@ left join (select payment_id, sum(amount) as amount_payed, MAX(payment_descripti
 left join fc_rf_operation_documents od on od.document_id = d.document_id 
 left join fc_operations o on o.operation_id = od.operation_id 
 where d.status = 3
-and year(d.abonado_date) >= 2022 
+and year(FROM_UNIXTIME(d.emission)) >= 2022 
 )
-select pagos.*, pagos.delta_price_amount + pagos.comissions/n_docs_per_op + pagos.expenses/n_docs_per_op + pagos.delay_amount as ingreso, ns.n_docs_per_op,
-30*(pagos.delta_price_amount + pagos.comissions/n_docs_per_op + pagos.expenses/n_docs_per_op + pagos.delay_amount)/(pagos.finance_amount*delta_days_payment) as real_rate,
-30*(pagos.delta_price_amount + pagos.comissions/n_docs_per_op + pagos.expenses/n_docs_per_op + pagos.delay_amount)/(pagos.finance_amount*delta_days_payment)*finance_amount as ponderado_amount
+select pagos.*, 
+pagos.delta_price_amount + pagos.comissions*(pagos.finance_amount/ns.finance_operation_amount) + pagos.expenses*(pagos.finance_amount/ns.finance_operation_amount) + pagos.delay_amount as ingreso, ns.n_docs_per_op,
+30*(pagos.delta_price_amount + pagos.comissions*(pagos.finance_amount/ns.finance_operation_amount) + pagos.expenses*(pagos.finance_amount/ns.finance_operation_amount) + pagos.delay_amount)/(pagos.finance_amount*delta_days_payment) as real_rate,
+30*(pagos.delta_price_amount + pagos.comissions*(pagos.finance_amount/ns.finance_operation_amount) + pagos.expenses*(pagos.finance_amount/ns.finance_operation_amount) + pagos.delay_amount)/(pagos.finance_amount*delta_days_payment)*pagos.finance_amount as ponderado_amount
 from pagos
-left join (select p2.operation_id, count(*) as n_docs_per_op
+left join (select p2.operation_id, count(*) as n_docs_per_op, sum(p2.finance_amount) as finance_operation_amount
 		from pagos p2
-		group by p2.operation_id ) ns on ns.operation_id = pagos.operation_id 
+		where p2.payment_type = 'cash'
+		group by p2.operation_id
+		) ns on ns.operation_id = pagos.operation_id 
+where pagos.payment_type = 'cash'
 		),
 sizes as (
  with w as (
