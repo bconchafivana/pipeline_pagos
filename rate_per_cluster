@@ -17,12 +17,11 @@ left join (select payment_id, sum(amount) as amount_payed, MAX(payment_descripti
 left join fc_rf_operation_documents od on od.document_id = d.document_id 
 left join fc_operations o on o.operation_id = od.operation_id 
 where d.status = 3
-and year(FROM_UNIXTIME(d.emission)) >= 2022 
+and year(FROM_UNIXTIME(d.emission)) >= 2023 
 )
 select pagos.*, 
 pagos.delta_price_amount + pagos.comissions*(pagos.finance_amount/ns.finance_operation_amount) + pagos.expenses*(pagos.finance_amount/ns.finance_operation_amount) + pagos.delay_amount as ingreso, ns.n_docs_per_op,
-30*(pagos.delta_price_amount + pagos.comissions*(pagos.finance_amount/ns.finance_operation_amount) + pagos.expenses*(pagos.finance_amount/ns.finance_operation_amount) + pagos.delay_amount)/(pagos.finance_amount*delta_days_payment) as real_rate,
-30*(pagos.delta_price_amount + pagos.comissions*(pagos.finance_amount/ns.finance_operation_amount) + pagos.expenses*(pagos.finance_amount/ns.finance_operation_amount) + pagos.delay_amount)/(pagos.finance_amount*delta_days_payment)*pagos.finance_amount as ponderado_amount
+(pagos.delta_price_amount + pagos.comissions*(pagos.finance_amount/ns.finance_operation_amount) + pagos.expenses*(pagos.finance_amount/ns.finance_operation_amount) + pagos.delay_amount)/(pagos.finance_amount*delta_days_payment) as daily_rate
 from pagos
 left join (select p2.operation_id, count(*) as n_docs_per_op, sum(p2.finance_amount) as finance_operation_amount
 		from pagos p2
@@ -57,7 +56,10 @@ from w
 group by business_reason, customer_id
 
 )
-select sum(pagos_finally.ponderado_amount)/sum(pagos_finally.finance_amount), sizes.sized
+select sizes.sized, sum(pagos_finally.ingreso)/sum(pagos_finally.finance_amount) as rate, avg(30*pagos_finally.daily_rate)  as avg_monthly_rate, 
+sum(pagos_finally.daily_rate*pagos_finally.finance_amount*pagos_finally.delta_days_payment)/sum(pagos_finally.finance_amount) as ponderated_rate,
+sum(pagos_finally.daily_rate*30*pagos_finally.finance_amount*pagos_finally.delta_days_payment)/sum(pagos_finally.finance_amount*pagos_finally.delta_days_payment) as ponderated_monthly_rate
 from pagos_finally
 left join sizes on sizes.customer_id = pagos_finally.client_rut 
 group by sizes.sized
+order by sizes.sized
